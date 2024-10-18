@@ -157,7 +157,7 @@ int tmin(void) { return 1 << 31; }
  *   Max ops: 10
  *   Rating: 1
  */
-int isTmax(int x) { return 2; }
+int isTmax(int x) { return !(~(x + 1) ^ x) & !!(x + 1); }
 /*
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
  *   where bits are numbered from 0 (least significant) to 31 (most significant)
