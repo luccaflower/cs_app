@@ -187,7 +187,10 @@ int negate(int x) { return ~x + 1; }
  *   Max ops: 15
  *   Rating: 3
  */
-int isAsciiDigit(int x) { return 2; }
+int isAsciiDigit(int x) {
+  int larger = 0xF0 + (0xFF << 8) + (0xFF << 16) + (0xFF << 24);
+  return !((x & larger) ^ 0x30) & !(((x & 0x0f) + 6) & 0x10);
+}
 /*
  * conditional - same as x ? y : z
  *   Example: conditional(2,4,5) = 4
@@ -207,7 +210,7 @@ int conditional(int x, int y, int z) {
  *   Max ops: 24
  *   Rating: 3
  */
-int isLessOrEqual(int x, int y) { return 2; }
+int isLessOrEqual(int x, int y) { return !((x + (~y + 1)) & (~1 + 1)); }
 // 4
 /*
  * logicalNeg - implement the ! operator, using all of
