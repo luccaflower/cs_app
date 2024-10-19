@@ -21,9 +21,16 @@ void test_2_13_bis_and_bic(void) {
   TEST_ASSERT_EQUAL(x ^ y, bool_xor(x, y));
 }
 
-int eq(int x, int y) { return ((x & y) | (~x & ~y)); }
+int shift1(unsigned i) { return (int)((i << 24) >> 24); }
+int shift2(unsigned i) { return ((int)i << 24) >> 24; }
 
-void test_2_15_eq(void) {
-  TEST_ASSERT_EQUAL(5 == 15, eq(5, 15));
-  TEST_ASSERT_EQUAL(10 == 10, eq(10, 10));
+void test_shift_operations(void) {
+  TEST_ASSERT_EQUAL(shift1(0x00000076u), (int)0x76);
+  TEST_ASSERT_EQUAL(shift2(0x00000076u), (int)0x76);
+  TEST_ASSERT_EQUAL(shift1(0x87654321u), (int)0x21);
+  TEST_ASSERT_EQUAL(shift2(0x87654321u), (int)0x21);
+  TEST_ASSERT_EQUAL(shift1(0x000000C9u), (int)0xC9);
+  TEST_ASSERT_EQUAL(shift2(0x000000C9u), (int)0xFFFFFFC9);
+  TEST_ASSERT_EQUAL(shift1(0xedcba987u), (int)0x00000087);
+  TEST_ASSERT_EQUAL(shift2(0xedcba987u), (int)0xFFFFFF87);
 }
