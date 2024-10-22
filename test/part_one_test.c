@@ -1,6 +1,7 @@
 #include "unity.h"
 #include "unity_internals.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 void test_pp_2_12_bitwise_expressions(void) {
   size_t x = 0x87654321;
@@ -36,15 +37,7 @@ void test_shift_operations(void) {
   TEST_ASSERT_EQUAL(shift2(0xedcba987u), (int)0xFFFFFF87);
 }
 
-int uadd_ok(unsigned x, unsigned y) {
-  unsigned carry = 0;
-  for (unsigned i = 0; i < 32; ++i) {
-    unsigned x_digit = (x & (1 << i)) >> i;
-    unsigned y_digit = (y & (1 << i)) >> i;
-    carry = (x_digit + y_digit + carry) >= 2;
-  }
-  return !carry;
-}
+int uadd_ok(unsigned x, unsigned y) { return x + y >= x; }
 
 void test_uadd_ok(void) {
   TEST_ASSERT_EQUAL(1, uadd_ok(1, 1));
@@ -52,4 +45,16 @@ void test_uadd_ok(void) {
   TEST_ASSERT_EQUAL(0, uadd_ok(0xFFFFFFFF, 0xFFFFFFFF));
   TEST_ASSERT_EQUAL(1, uadd_ok(0xF0000000, 0x0FFFFFFF));
   TEST_ASSERT_EQUAL(0, uadd_ok(0x7FFFFFFF, 0x80000001));
+}
+
+int div16(int x) {
+  int x_neg = ((x + (1 << 4) - 1) & (!(x & 0x80000000) - 1));
+  int x_pos = (!!x_neg - 1) & x;
+  return (x_neg | x_pos) >> 4;
+}
+void test_div16(void) {
+  TEST_ASSERT_EQUAL(16 / 16, div16(16));
+  TEST_ASSERT_EQUAL(32 / 16, div16(32));
+  TEST_ASSERT_EQUAL(35 / 16, div16(35));
+  TEST_ASSERT_EQUAL(-35 / 16, div16(-35));
 }
