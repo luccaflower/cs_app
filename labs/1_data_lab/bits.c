@@ -210,7 +210,10 @@ int conditional(int x, int y, int z) {
  *   Max ops: 24
  *   Rating: 3
  */
-int isLessOrEqual(int x, int y) { return !((x + (~y + 1)) & (~1 + 1)); }
+int isLessOrEqual(int x, int y) {
+  int tmin = 1 << 31;
+  return !(y + (~x + 1) & tmin);
+}
 // 4
 /*
  * logicalNeg - implement the ! operator, using all of
@@ -220,7 +223,7 @@ int isLessOrEqual(int x, int y) { return !((x + (~y + 1)) & (~1 + 1)); }
  *   Max ops: 12
  *   Rating: 4
  */
-int logicalNeg(int x) { return 2; }
+int logicalNeg(int x) { return ~(x >> 31 & 1) & (~(x ^ (~x + 1)) >> 31) & 1; }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
  *  Examples: howManyBits(12) = 5
@@ -233,14 +236,14 @@ int logicalNeg(int x) { return 2; }
  *  Max ops: 90
  *  Rating: 4
  */
-int howManyBits(int x) { return 0; }
+int howManyBits(int x) { return 2; }
 // float
 /*
  * floatScale2 - Return bit-level equivalent of expression 2*f for
  *   floating point argument f.
  *   Both the argument and result are passed as unsigned int's, but
  *   they are to be interpreted as the bit-level representation of
- *   single-precision floating point values.
+ *   single-precision floating point value```s.
  *   When argument is NaN, return argument
  *   Legal ops: Any integer/unsigned operations incl. ||, &&. also if, while
  *   Max ops: 30
