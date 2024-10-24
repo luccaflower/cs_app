@@ -281,6 +281,7 @@ unsigned floatScale2(unsigned uf) {
  */
 int floatFloat2Int(unsigned uf) {
   unsigned sign = uf & 0x80000000;
+  unsigned frac = uf & 0x007FFFFF;
   signed exp = ((uf & 0x7F800000) >> 23) - 127;
   int abs;
   if (exp < 0) {
@@ -289,7 +290,7 @@ int floatFloat2Int(unsigned uf) {
   if (exp > 31) {
     return 0x80000000u;
   }
-  abs = 1 << exp;
+  abs = (1 << exp) + (frac >> (23 - exp));
   return sign ? 0 - abs : abs;
 }
 /*
