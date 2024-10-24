@@ -87,7 +87,7 @@ EXAMPLES OF ACCEPTABLE CODING STYLE:
      int result = (1 << x);
      result += 4;
      return result;
-  }
+  })
 
 FLOATING POINT CODING RULES
 
@@ -236,14 +236,7 @@ int logicalNeg(int x) { return ((x & (~x + 1)) + ~0) >> 31 & 1; }
  *  Max ops: 90
  *  Rating: 4
  */
-int howManyBits(int x) {
-  int i = 1;
-  unsigned ux = x;
-  while (ux >>= 1) {
-    i++;
-  }
-  return i;
-}
+int howManyBits(int x) { return 2; }
 // float
 /*
  * floatScale2 - Return bit-level equivalent of expression 2*f for
@@ -286,7 +279,19 @@ unsigned floatScale2(unsigned uf) {
  *   Max ops: 30
  *   Rating: 4
  */
-int floatFloat2Int(unsigned uf) { return 2; }
+int floatFloat2Int(unsigned uf) {
+  unsigned sign = uf & 0x80000000;
+  signed exp = ((uf & 0x7F800000) >> 23) - 127;
+  int abs;
+  if (exp < 0) {
+    return 0;
+  }
+  if (exp > 31) {
+    return 0x80000000u;
+  }
+  abs = 1 << exp;
+  return sign ? 0 - abs : abs;
+}
 /*
  * floatPower2 - Return bit-level equivalent of the expression 2.0^x
  *   (2.0 raised to the power x) for any 32-bit integer x.
