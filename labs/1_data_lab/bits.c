@@ -243,13 +243,30 @@ int howManyBits(int x) { return 2; }
  *   floating point argument f.
  *   Both the argument and result are passed as unsigned int's, but
  *   they are to be interpreted as the bit-level representation of
- *   single-precision floating point value```s.
+ *   single-precision floating point values.
  *   When argument is NaN, return argument
  *   Legal ops: Any integer/unsigned operations incl. ||, &&. also if, while
  *   Max ops: 30
  *   Rating: 4
  */
-unsigned floatScale2(unsigned uf) { return 2; }
+unsigned floatScale2(unsigned uf) {
+  unsigned sign = uf & 0x80000000;
+  unsigned exp = (uf & 0x7F800000) >> 23;
+  unsigned frac = uf & 0x007FFFFF;
+  if (exp == 0xFF)
+    return uf;
+
+  if (exp)
+    exp += 1;
+  else
+    frac = frac << 1;
+  if (frac & 0x800000) {
+    frac = frac & 0x007FFFFF;
+    exp += 1;
+  }
+
+  return sign + (exp << 23) + frac;
+}
 /*
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
  *   for floating point argument f.
