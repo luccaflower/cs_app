@@ -306,4 +306,12 @@ int floatFloat2Int(unsigned uf) {
  *   Max ops: 30
  *   Rating: 4
  */
-unsigned floatPower2(int x) { return 2; }
+unsigned floatPower2(int x) {
+  int exp;
+  if (x > 127)
+    return 0x7F800000;
+  if (x < -127)
+    return 0;
+  exp = x + 127;
+  return exp << 23;
+}
