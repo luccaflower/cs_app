@@ -58,3 +58,18 @@ void test_div16(void) {
   TEST_ASSERT_EQUAL(35 / 16, div16(35));
   TEST_ASSERT_EQUAL(-35 / 16, div16(-35));
 }
+
+int count_bits(int x) {
+  int count = 0;
+  for (int i = 4; i >= 0; i--) {
+    int present = (x & (1 << i));
+    count = ((!!count - 1) & (!present - 1) & (1 + i)) | count;
+  }
+  return count;
+}
+void test_count_bits(void) {
+  TEST_ASSERT_EQUAL(1, count_bits(1));
+  TEST_ASSERT_EQUAL(2, count_bits(2));
+  TEST_ASSERT_EQUAL(2, count_bits(3));
+  TEST_ASSERT_EQUAL(3, count_bits(4));
+}
