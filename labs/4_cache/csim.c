@@ -23,9 +23,10 @@ typedef struct {
   block_t **sets;
 } cache_t;
 
-result_t process_trace(FILE *trace, cache_t *cache);
 cache_t *new_cache(unsigned int set_bits, unsigned int associativity,
                    unsigned int block_bits);
+result_t process_trace(FILE *trace, cache_t *cache);
+
 int main(int argc, char **argv) {
   char opt;
   unsigned int set_bits, associativity, block_bits;
@@ -58,8 +59,6 @@ int main(int argc, char **argv) {
   return EXIT_SUCCESS;
 }
 
-void hit_miss_evict(block_t **sets, unsigned int set, unsigned int tag,
-                    unsigned int associativity, result_t *result);
 cache_t *new_cache(unsigned int set_bits, unsigned int associativity,
                    unsigned int block_bits) {
   unsigned int set_count = 1 << set_bits;
@@ -75,6 +74,9 @@ cache_t *new_cache(unsigned int set_bits, unsigned int associativity,
   }
   return cache;
 }
+
+void hit_miss_evict(block_t **sets, unsigned int set, unsigned int tag,
+                    unsigned int associativity, result_t *result);
 
 result_t process_trace(FILE *trace, cache_t *cache) {
   result_t result = {.hits = 0, .evictions = 0, .misses = 0};
@@ -101,8 +103,10 @@ result_t process_trace(FILE *trace, cache_t *cache) {
 
 int index_of(unsigned int tag, block_t *set, unsigned int associativity);
 void move_up(unsigned int index, block_t *set);
+
 typedef enum { NO_EVICT, EVICT } eviction_t;
 eviction_t insert(unsigned int tag, block_t *set, unsigned int associativity);
+
 void hit_miss_evict(block_t **sets, unsigned int set_index, unsigned int tag,
                     unsigned int associativity, result_t *result) {
   block_t *set = sets[set_index];
@@ -117,6 +121,21 @@ void hit_miss_evict(block_t **sets, unsigned int set_index, unsigned int tag,
     move_up(index, set);
   }
 }
+
+eviction_t insert(unsigned int tag, block_t *set, unsigned int associativity) {
+  block_t block = {.valid = true, .tag = tag};
+  for (size_t i = 0; i < associativity; i++) {
+    if (!set[i].valid) {
+      set[i] = block;
+      move_up(i, set);
+      return NO_EVICT;
+    }
+  }
+  set[associativity - 1] = block;
+  move_up(associativity - 1, set);
+  return EVICT;
+}
+
 int index_of(unsigned int tag, block_t *set, unsigned int associativity) {
   for (size_t i = 0; i < associativity; i++) {
     if (set[i].valid && set[i].tag == tag) {
@@ -132,18 +151,4 @@ void move_up(unsigned int index, block_t *set) {
     set[i] = set[i - 1];
   }
   set[0] = to_move;
-}
-
-eviction_t insert(unsigned int tag, block_t *set, unsigned int associativity) {
-  block_t block = {.valid = true, .tag = tag};
-  for (size_t i = 0; i < associativity; i++) {
-    if (!set[i].valid) {
-      set[i] = block;
-      move_up(i, set);
-      return NO_EVICT;
-    }
-  }
-  set[associativity - 1] = block;
-  move_up(associativity - 1, set);
-  return EVICT;
 }
