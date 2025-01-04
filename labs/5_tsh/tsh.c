@@ -3,7 +3,7 @@
  *
  * <Put your name and login ID here>
  */
-#include <ctype.h>
+#include <bits/types/sigset_t.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -42,6 +42,8 @@ char prompt[] = "tsh> "; /* command line prompt (DO NOT CHANGE) */
 int verbose = 0;         /* if true, print additional output */
 int nextjid = 1;         /* next job ID to allocate */
 char sbuf[MAXLINE];      /* for composing sprintf messages */
+
+volatile sig_atomic_t caught_signal;
 
 struct job_t {             /* The job struct */
     pid_t pid;             /* job PID */
@@ -84,6 +86,12 @@ void unix_error(char *msg);
 void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+void Sigemptyset(sigset_t *set);
+void Sigaddset(sigset_t *set, int signum);
+pid_t Fork(void);
+void Execve(const char *filename, char *const argv[], char *const envp[]);
+pid_t Waitpid(pid_t pid, int *iptr, int options);
 
 /*
  * main - The shell's main routine
@@ -145,6 +153,7 @@ int main(int argc, char **argv) {
         /* Evaluate the command line */
         eval(cmdline);
         fflush(stdout);
+
         fflush(stdout);
     }
 
@@ -162,41 +171,78 @@ int main(int argc, char **argv) {
  * background children don't receive SIGINT (SIGTSTP) from the kernel
  * when we type ctrl-c (ctrl-z) at the keyboard.
  */
-pid_t Fork();
 void eval(char *cmdline) {
     char *argv[MAXARGS];
     int bg;
     bg = parseline(cmdline, argv);
+    sigset_t mask, prev;
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGINT);
+    Sigaddset(&mask, SIGCHLD);
     pid_t pid;
     if (argv[0] == NULL) {
         return;
     }
 
     if (!builtin_cmd(argv)) {
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
         if ((pid = Fork()) == 0) {
-            if (execve(argv[0], argv, environ) < 0) {
-                printf("%s: Command not found!\n", argv[0]);
-                exit(0);
-            }
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            Execve(argv[0], argv, environ);
         }
+        int job_id = addjob(jobs, pid, bg ? BG : FG, cmdline);
         if (!bg) {
-            int status;
-            if (waitpid(pid, &status, 0) < 0) {
-                unix_error("waiftfg: waitpid error");
+            int fg_running = 1;
+            while (fg_running) {
+                sigsuspend(&prev);
+                int stopped_pid;
+                int wstatus;
+                switch (caught_signal) {
+                case SIGCHLD:
+                    if (verbose) {
+                        puts("Caught SIGCHLD");
+                    }
+                    while ((stopped_pid = waitpid(-1, &wstatus, WNOHANG)) >=
+                           0) {
+                        if (stopped_pid == pid) {
+                            if (verbose) {
+                                puts("FG process stopped");
+                            }
+                            fg_running = 0;
+                        }
+                        int job_id = pid2jid(stopped_pid);
+                        if (WIFSIGNALED(wstatus)) {
+                            printf("Job [%d] (%d) terminated with signal %d\n",
+                                   job_id, stopped_pid, WTERMSIG(wstatus));
+                        }
+                        deletejob(jobs, stopped_pid);
+                    }
+                    break;
+                case SIGINT:
+                    if (verbose) {
+                        puts("Caught SIGINT");
+                        printf("Sending signal to %d\n", pid);
+                    }
+                    kill(-pid, SIGINT);
+                    break;
+                case SIGTSTP:
+                    if (verbose) {
+                        puts("Caught SIGTSTP");
+                        printf("Sending signal to %d\n", pid);
+                    }
+                    struct job_t *job = getjobpid(jobs, pid);
+                    job->state = BG;
+                    kill(-pid, SIGTSTP);
+                    fg_running = 0;
+                    break;
+                }
+                caught_signal = 0;
             }
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
         } else {
-            int job_id = addjob(jobs, pid, BG, cmdline);
             printf("[%d] (%d) %s\n", job_id, pid, cmdline);
         }
     }
-}
-
-pid_t Fork() {
-    pid_t pid;
-    if ((pid = fork()) < 0) {
-        unix_error("Fork error");
-    }
-    return pid;
 }
 
 /*
@@ -289,21 +335,21 @@ void waitfg(pid_t pid) { return; }
  *     available zombie children, but doesn't wait for any other
  *     currently running children to terminate.
  */
-void sigchld_handler(int sig) { return; }
+void sigchld_handler(int sig) { caught_signal = SIGCHLD; }
 
 /*
  * sigint_handler - The kernel sends a SIGINT to the shell whenver the
  *    user types ctrl-c at the keyboard.  Catch it and send it along
  *    to the foreground job.
  */
-void sigint_handler(int sig) { return; }
+void sigint_handler(int sig) { caught_signal = SIGINT; }
 
 /*
  * sigtstp_handler - The kernel sends a SIGTSTP to the shell whenever
  *     the user types ctrl-z at the keyboard. Catch it and suspend the
  *     foreground job by sending it a SIGTSTP.
  */
-void sigtstp_handler(int sig) { return; }
+void sigtstp_handler(int sig) { caught_signal = SIGTSTP; }
 
 /*********************
  * End signal handlers
@@ -504,6 +550,41 @@ handler_t *Signal(int signum, handler_t *handler) {
     return (old_action.sa_handler);
 }
 
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    if (sigprocmask(how, set, oldset) < 0)
+        unix_error("Sigprocmask error");
+    return;
+}
+
+pid_t Fork(void) {
+    pid_t pid;
+
+    if ((pid = fork()) < 0)
+        unix_error("Fork error");
+    return pid;
+}
+void Execve(const char *filename, char *const argv[], char *const envp[]) {
+    if (execve(filename, argv, envp) < 0)
+        unix_error("Execve error");
+}
+pid_t Waitpid(pid_t pid, int *iptr, int options) {
+    pid_t retpid;
+
+    if ((retpid = waitpid(pid, iptr, options)) < 0)
+        unix_error("Waitpid error");
+    return (retpid);
+}
+void Sigemptyset(sigset_t *set) {
+    if (sigemptyset(set) < 0)
+        unix_error("Sigemptyset error");
+    return;
+}
+
+void Sigaddset(sigset_t *set, int signum) {
+    if (sigaddset(set, signum) < 0)
+        unix_error("Sigaddset error");
+    return;
+}
 /*
  * sigquit_handler - The driver program can gracefully terminate the
  *    child shell by sending it a SIGQUIT signal.
