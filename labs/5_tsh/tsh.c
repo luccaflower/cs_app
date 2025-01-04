@@ -60,7 +60,8 @@ struct job_t jobs[MAXJOBS]; /* The job list */
 void eval(char *cmdline);
 int builtin_cmd(char **argv);
 void do_bgfg(char **argv);
-void waitfg(pid_t pid);
+void waitfg(pid_t pid, sigset_t *sig_mask);
+pid_t reap(struct job_t *jobs);
 
 void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
@@ -152,6 +153,17 @@ int main(int argc, char **argv) {
 
         /* Evaluate the command line */
         eval(cmdline);
+        if (caught_signal == SIGCHLD) {
+            pid_t pid;
+            sigset_t signals, prev;
+            Sigemptyset(&signals);
+            Sigaddset(&signals, SIGCHLD);
+            Sigprocmask(SIG_BLOCK, &signals, &prev);
+            while ((pid = reap(jobs)) > 0) {
+            }
+            caught_signal = 0;
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+        }
         fflush(stdout);
 
         fflush(stdout);
@@ -179,6 +191,7 @@ void eval(char *cmdline) {
     Sigemptyset(&mask);
     Sigaddset(&mask, SIGINT);
     Sigaddset(&mask, SIGCHLD);
+    Sigaddset(&mask, SIGTSTP);
     pid_t pid;
     if (argv[0] == NULL) {
         return;
@@ -188,60 +201,18 @@ void eval(char *cmdline) {
         Sigprocmask(SIG_BLOCK, &mask, &prev);
         if ((pid = Fork()) == 0) {
             Sigprocmask(SIG_SETMASK, &prev, NULL);
+            if (setpgid(0, 0) < 0) {
+                unix_error("setpgid error");
+            }
             Execve(argv[0], argv, environ);
         }
         int job_id = addjob(jobs, pid, bg ? BG : FG, cmdline);
         if (!bg) {
-            int fg_running = 1;
-            while (fg_running) {
-                sigsuspend(&prev);
-                int stopped_pid;
-                int wstatus;
-                switch (caught_signal) {
-                case SIGCHLD:
-                    if (verbose) {
-                        puts("Caught SIGCHLD");
-                    }
-                    while ((stopped_pid = waitpid(-1, &wstatus, WNOHANG)) >=
-                           0) {
-                        if (stopped_pid == pid) {
-                            if (verbose) {
-                                puts("FG process stopped");
-                            }
-                            fg_running = 0;
-                        }
-                        int job_id = pid2jid(stopped_pid);
-                        if (WIFSIGNALED(wstatus)) {
-                            printf("Job [%d] (%d) terminated with signal %d\n",
-                                   job_id, stopped_pid, WTERMSIG(wstatus));
-                        }
-                        deletejob(jobs, stopped_pid);
-                    }
-                    break;
-                case SIGINT:
-                    if (verbose) {
-                        puts("Caught SIGINT");
-                        printf("Sending signal to %d\n", pid);
-                    }
-                    kill(-pid, SIGINT);
-                    break;
-                case SIGTSTP:
-                    if (verbose) {
-                        puts("Caught SIGTSTP");
-                        printf("Sending signal to %d\n", pid);
-                    }
-                    struct job_t *job = getjobpid(jobs, pid);
-                    job->state = BG;
-                    kill(-pid, SIGTSTP);
-                    fg_running = 0;
-                    break;
-                }
-                caught_signal = 0;
-            }
-            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            waitfg(pid, &prev);
         } else {
             printf("[%d] (%d) %s\n", job_id, pid, cmdline);
         }
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
     }
 }
 
@@ -305,7 +276,7 @@ int parseline(const char *cmdline, char **argv) {
  */
 int builtin_cmd(char **argv) {
     if (!strcmp(argv[0], "quit")) {
-        return 1;
+        exit(0);
     }
     if (!strcmp(argv[0], "jobs")) {
         listjobs(jobs);
@@ -322,7 +293,75 @@ void do_bgfg(char **argv) { return; }
 /*
  * waitfg - Block until process pid is no longer the foreground process
  */
-void waitfg(pid_t pid) { return; }
+void waitfg(pid_t pid, sigset_t *sig_mask) {
+    int fg_running = 1;
+    while (fg_running) {
+        sigsuspend(sig_mask);
+        int stopped_pid;
+        switch (caught_signal) {
+        case SIGCHLD:
+            if (verbose) {
+                puts("Caught SIGCHLD");
+            }
+
+            while ((stopped_pid = reap(jobs)) > 0) {
+                if (verbose) {
+                    printf("(%d) stopped\n", stopped_pid);
+                }
+                if (stopped_pid == pid) {
+                    if (verbose) {
+                        puts("FG process stopped");
+                    }
+                    fg_running = 0;
+                }
+            }
+            break;
+        case SIGINT:
+            if (verbose) {
+                puts("Caught SIGINT");
+                printf("Sending SIGINT to %d\n", -pid);
+            }
+            kill(-pid, SIGINT);
+            break;
+        case SIGTSTP:
+            if (verbose) {
+                puts("Caught SIGTSTP");
+                printf("Sending SIGTSTP to %d\n", -pid);
+            }
+            struct job_t *job = getjobpid(jobs, pid);
+            job->state = BG;
+            kill(-pid, SIGTSTP);
+            printf("Job [%d] (%d) stopped by signal 20\n", job->jid, pid);
+            fg_running = 0;
+            break;
+        }
+        caught_signal = 0;
+    }
+}
+
+pid_t reap(struct job_t *jobs) {
+    int pid;
+    int wstatus;
+    pid = waitpid(-1, &wstatus, WNOHANG);
+    if (pid < 0 && errno != ECHILD) {
+        printf("waitpid error: %s", strerror(errno));
+        exit(1);
+    }
+    if (pid > 0) {
+        int job_id = pid2jid(pid);
+        if (WIFSIGNALED(wstatus)) {
+            printf("Job [%d] (%d) terminated by signal %d\n", job_id, pid,
+                   WTERMSIG(wstatus));
+        } else if (WIFEXITED(wstatus)) {
+            if (verbose) {
+                printf("Job [%d] (%d) terminated normally with status %d\n",
+                       job_id, pid, WEXITSTATUS(wstatus));
+            }
+        }
+        deletejob(jobs, pid);
+    }
+    return pid;
+}
 
 /*****************
  * Signal handlers
