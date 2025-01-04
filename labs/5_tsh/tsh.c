@@ -43,7 +43,9 @@ int verbose = 0;         /* if true, print additional output */
 int nextjid = 1;         /* next job ID to allocate */
 char sbuf[MAXLINE];      /* for composing sprintf messages */
 
-volatile sig_atomic_t caught_signal;
+static volatile sig_atomic_t caught_signal;
+static sigset_t all_mask;
+static sigset_t chd_mask;
 
 struct job_t {             /* The job struct */
     pid_t pid;             /* job PID */
@@ -62,6 +64,7 @@ int builtin_cmd(char **argv);
 void do_bgfg(char **argv);
 void waitfg(pid_t pid, sigset_t *sig_mask);
 pid_t reap(struct job_t *jobs);
+struct job_t *get_job_from_input(char **argv);
 
 void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
@@ -136,6 +139,10 @@ int main(int argc, char **argv) {
     /* Initialize the job list */
     initjobs(jobs);
 
+    sigfillset(&all_mask);
+    sigemptyset(&chd_mask);
+    sigaddset(&chd_mask, SIGCHLD);
+
     /* Execute the shell's read/eval loop */
     while (1) {
 
@@ -155,10 +162,8 @@ int main(int argc, char **argv) {
         eval(cmdline);
         if (caught_signal == SIGCHLD) {
             pid_t pid;
-            sigset_t signals, prev;
-            Sigemptyset(&signals);
-            Sigaddset(&signals, SIGCHLD);
-            Sigprocmask(SIG_BLOCK, &signals, &prev);
+            sigset_t prev;
+            Sigprocmask(SIG_BLOCK, &chd_mask, &prev);
             while ((pid = reap(jobs)) > 0) {
             }
             caught_signal = 0;
@@ -187,18 +192,14 @@ void eval(char *cmdline) {
     char *argv[MAXARGS];
     int bg;
     bg = parseline(cmdline, argv);
-    sigset_t mask, prev;
-    Sigemptyset(&mask);
-    Sigaddset(&mask, SIGINT);
-    Sigaddset(&mask, SIGCHLD);
-    Sigaddset(&mask, SIGTSTP);
+    sigset_t prev;
     pid_t pid;
     if (argv[0] == NULL) {
         return;
     }
 
     if (!builtin_cmd(argv)) {
-        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        Sigprocmask(SIG_BLOCK, &all_mask, &prev);
         if ((pid = Fork()) == 0) {
             Sigprocmask(SIG_SETMASK, &prev, NULL);
             if (setpgid(0, 0) < 0) {
@@ -277,12 +278,57 @@ int parseline(const char *cmdline, char **argv) {
 int builtin_cmd(char **argv) {
     if (!strcmp(argv[0], "quit")) {
         exit(0);
-    }
-    if (!strcmp(argv[0], "jobs")) {
+    } else if (!strcmp(argv[0], "jobs")) {
         listjobs(jobs);
+        return 1;
+    } else if (!strcmp(argv[0], "fg")) {
+        if (!argv[1]) {
+            puts("fg command requires PID or %jobid argument");
+            return 1;
+        }
+        struct job_t *job = get_job_from_input(argv);
+        if (!job)
+            return 1;
+        pid_t pid = job->pid;
+        kill(-pid, SIGCONT);
+        job->state = FG;
+        sigset_t mask;
+        Sigprocmask(SIG_UNBLOCK, NULL, &mask);
+        waitfg(pid, &mask);
+        return 1;
+    } else if (!strcmp(argv[0], "bg")) {
+        if (!argv[1]) {
+            puts("bg command requires PID or %jobid argument");
+            return 1;
+        }
+        struct job_t *job = get_job_from_input(argv);
+        if (!job)
+            return 1;
+        pid_t pid = job->pid;
+        kill(-pid, SIGCONT);
+        printf("[%d] (%d) %s", job->jid, pid, job->cmdline);
+        job->state = BG;
         return 1;
     }
     return 0;
+}
+
+struct job_t *get_job_from_input(char **argv) {
+    int id;
+    struct job_t *job;
+    if (sscanf(argv[1], "%%%d", &id)) {
+        job = getjobjid(jobs, id);
+        if (!job)
+            printf("%s: No such job\n", argv[1]);
+    } else if (sscanf(argv[1], "%d", &id)) {
+        job = getjobpid(jobs, id);
+        if (!job)
+            printf("(%s): No such process\n", argv[1]);
+    } else {
+        printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+        return NULL;
+    }
+    return job;
 }
 
 /*
@@ -329,7 +375,7 @@ void waitfg(pid_t pid, sigset_t *sig_mask) {
                 printf("Sending SIGTSTP to %d\n", -pid);
             }
             struct job_t *job = getjobpid(jobs, pid);
-            job->state = BG;
+            job->state = ST;
             kill(-pid, SIGTSTP);
             printf("Job [%d] (%d) stopped by signal 20\n", job->jid, pid);
             fg_running = 0;
@@ -603,8 +649,10 @@ pid_t Fork(void) {
     return pid;
 }
 void Execve(const char *filename, char *const argv[], char *const envp[]) {
-    if (execve(filename, argv, envp) < 0)
-        unix_error("Execve error");
+    if (execve(filename, argv, envp) < 0) {
+        printf("%s: Command not found\n", filename);
+        exit(1);
+    }
 }
 pid_t Waitpid(pid_t pid, int *iptr, int options) {
     pid_t retpid;
