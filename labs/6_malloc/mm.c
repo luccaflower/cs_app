@@ -45,23 +45,7 @@ team_t team = {
 
 #define WSIZE 4
 #define DSIZE 8
-#define CHUNKSIZE (1 << 13)
-
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
-
-#define PACK(size, alloc) ((size) | (alloc))
-
-#define GET(p) (*(unsigned int *)(p))
-#define PUT(p, val) (*(unsigned int *)(p) = (val))
-
-#define GET_SIZE(p) (GET(p) & ~0x7)
-#define GET_ALLOC(p) (GET(p) & 0x1)
-
-#define HDRP(bp) ((char *)(bp) - WSIZE)
-#define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
-
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE((char *)(bp) - WSIZE))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE((char *)(bp) - DSIZE))
+#define CHUNKSIZE (1 << 12)
 
 static char *heap_listp;
 
@@ -70,6 +54,21 @@ static void *coalesce(char *);
 static void *find_fit(size_t size);
 static void place(void *bp, size_t size);
 static void mm_heapcheck(int lineno);
+
+static inline size_t max(size_t x, size_t y) { return x > y ? x : y; }
+static inline unsigned int get(void *p) { return *(unsigned int *)p; }
+static inline unsigned int get_size(char *p) { return get(p) & ~0x7; }
+static inline unsigned int get_alloc(char *p) { return get(p) & 0x1; }
+static inline void put(void *p, unsigned int val) { *(unsigned int *)p = val; }
+static inline unsigned int pack(unsigned int size, unsigned int alloc) {
+    return size | alloc;
+}
+static inline char *header(char *bp) { return bp - WSIZE; }
+static inline char *footer(char *bp) {
+    return bp + get_size(header(bp)) - DSIZE;
+}
+static char *next_block_pointer(char *bp) { return bp + get_size(header(bp)); }
+static char *prev_block_pointer(char *bp) { return bp - get_size(bp - DSIZE); }
 
 // #define heapcheck(lineno) mm_heapcheck(lineno)
 #define heapcheck(lineno)
@@ -80,10 +79,10 @@ static void mm_heapcheck(int lineno);
 int mm_init(void) {
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
-    PUT(heap_listp, 0);
-    PUT(heap_listp + WSIZE, PACK(DSIZE, 1));
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
+    put(heap_listp, 0);
+    put(heap_listp + WSIZE, pack(DSIZE, 1));
+    put(heap_listp + (2 * WSIZE), pack(DSIZE, 1));
+    put(heap_listp + (3 * WSIZE), pack(0, 1));
     heap_listp += (2 * WSIZE);
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
@@ -118,7 +117,7 @@ void *mm_malloc(size_t size) {
         return bp;
     }
 
-    ext_size = MAX(adj_size, CHUNKSIZE);
+    ext_size = max(adj_size, CHUNKSIZE);
     if ((bp = extend_heap(ext_size)) == NULL) {
         return NULL;
     }
@@ -131,10 +130,10 @@ void *mm_malloc(size_t size) {
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *bp) {
-    size_t size = GET_SIZE(HDRP(bp));
+    size_t size = get_size(header(bp));
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    put(header(bp), pack(size, 0));
+    put(footer(bp), pack(size, 0));
     coalesce(bp);
 }
 
@@ -149,7 +148,7 @@ void *mm_realloc(void *bp, size_t size) {
     newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    copy_size = GET_SIZE(HDRP(oldptr)) - DSIZE;
+    copy_size = get_size(header(oldptr)) - DSIZE;
     if (size < copy_size)
         copy_size = size;
     memcpy(newptr, oldptr, copy_size);
@@ -166,34 +165,35 @@ static void *extend_heap(size_t words) {
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+    put(header(bp), pack(size, 0));
+    put(footer(bp), pack(size, 0));
+    put(header(next_block_pointer(bp)), pack(0, 1));
     heapcheck(__LINE__);
     return coalesce(bp);
 }
 
 static void *coalesce(char *bp) {
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_SIZE(HDRP(bp));
+    size_t prev_alloc = get_alloc(footer(prev_block_pointer(bp)));
+    size_t next_alloc = get_alloc(header(next_block_pointer(bp)));
+    size_t size = get_size(header(bp));
 
     if (prev_alloc && next_alloc)
         return bp;
     else if (prev_alloc && !next_alloc) {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        PUT(HDRP(bp), PACK(size, 0));
-        PUT(FTRP(bp), PACK(size, 0));
+        size += get_size(header(next_block_pointer(bp)));
+        put(header(bp), pack(size, 0));
+        put(footer(bp), pack(size, 0));
     } else if (!prev_alloc && next_alloc) {
-        size += GET_SIZE(FTRP(PREV_BLKP(bp)));
-        PUT(FTRP(bp), PACK(size, 0));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        bp = PREV_BLKP(bp);
+        size += get_size(footer(prev_block_pointer(bp)));
+        put(footer(bp), pack(size, 0));
+        put(header(prev_block_pointer(bp)), pack(size, 0));
+        bp = prev_block_pointer(bp);
     } else {
-        size += GET_SIZE(FTRP(PREV_BLKP(bp))) + GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-        bp = PREV_BLKP(bp);
+        size += get_size(footer(prev_block_pointer(bp))) +
+                get_size(header(next_block_pointer(bp)));
+        put(header(prev_block_pointer(bp)), pack(size, 0));
+        put(footer(next_block_pointer(bp)), pack(size, 0));
+        bp = prev_block_pointer(bp);
     }
 
     heapcheck(__LINE__);
@@ -202,8 +202,9 @@ static void *coalesce(char *bp) {
 
 static void *find_fit(size_t size) {
     char *bp;
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        if (!GET_ALLOC(HDRP(bp)) && (size <= GET_SIZE(HDRP(bp)))) {
+    for (bp = heap_listp; get_size(header(bp)) > 0;
+         bp = next_block_pointer(bp)) {
+        if (!get_alloc(header(bp)) && (size <= get_size(header(bp)))) {
             heapcheck(__LINE__);
             return bp;
         }
@@ -213,23 +214,24 @@ static void *find_fit(size_t size) {
 }
 
 static void place(void *bp, size_t size) {
-    size_t csize = GET_SIZE(HDRP(bp));
+    size_t csize = get_size(header(bp));
     if ((csize - size) >= (2 * DSIZE)) {
-        PUT(HDRP(bp), PACK(size, 1));
-        PUT(FTRP(bp), PACK(size, 1));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(csize - size, 0));
-        PUT(FTRP(bp), PACK(csize - size, 0));
+        put(header(bp), pack(size, 1));
+        put(footer(bp), pack(size, 1));
+        bp = next_block_pointer(bp);
+        put(header(bp), pack(csize - size, 0));
+        put(footer(bp), pack(csize - size, 0));
     } else {
-        PUT(HDRP(bp), PACK(csize, 1));
-        PUT(FTRP(bp), PACK(csize, 1));
+        put(header(bp), pack(csize, 1));
+        put(footer(bp), pack(csize, 1));
     }
 }
 
 static void mm_heapcheck(int lineno) {
     printf("heapcheck called from line %d \n", lineno);
-    for (char *bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
-        assert(GET_ALLOC(HDRP(bp)) == GET_ALLOC(FTRP(bp)));
+    for (char *bp = heap_listp; get_size(header(bp)) > 0;
+         bp = next_block_pointer(bp)) {
+        assert(get_size(header(bp)) == get_size(footer(bp)));
+        assert(get_alloc(header(bp)) == get_alloc(footer(bp)));
     }
 }
