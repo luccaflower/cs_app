@@ -36,16 +36,9 @@ team_t team = {
     ""};
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
-
-/* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
-#define WSIZE 4
-#define DSIZE 8
-#define CHUNKSIZE (1 << 12)
+constexpr unsigned int w_size = 4;
+constexpr unsigned int d_size = 8;
+constexpr unsigned int chunk_size = 1 << 12;
 
 static char *heap_listp;
 
@@ -63,12 +56,12 @@ static inline void put(void *p, unsigned int val) { *(unsigned int *)p = val; }
 static inline unsigned int pack(unsigned int size, unsigned int alloc) {
     return size | alloc;
 }
-static inline char *header(char *bp) { return bp - WSIZE; }
+static inline char *header(char *bp) { return bp - w_size; }
 static inline char *footer(char *bp) {
-    return bp + get_size(header(bp)) - DSIZE;
+    return bp + get_size(header(bp)) - d_size;
 }
 static char *next_block_pointer(char *bp) { return bp + get_size(header(bp)); }
-static char *prev_block_pointer(char *bp) { return bp - get_size(bp - DSIZE); }
+static char *prev_block_pointer(char *bp) { return bp - get_size(bp - d_size); }
 
 // #define heapcheck(lineno) mm_heapcheck(lineno)
 #define heapcheck(lineno)
@@ -77,15 +70,15 @@ static char *prev_block_pointer(char *bp) { return bp - get_size(bp - DSIZE); }
  * mm_init - initialize the malloc package.
  */
 int mm_init(void) {
-    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(4 * w_size)) == (void *)-1)
         return -1;
     put(heap_listp, 0);
-    put(heap_listp + WSIZE, pack(DSIZE, 1));
-    put(heap_listp + (2 * WSIZE), pack(DSIZE, 1));
-    put(heap_listp + (3 * WSIZE), pack(0, 1));
-    heap_listp += (2 * WSIZE);
+    put(heap_listp + w_size, pack(d_size, 1));
+    put(heap_listp + (2 * w_size), pack(d_size, 1));
+    put(heap_listp + (3 * w_size), pack(0, 1));
+    heap_listp += (2 * w_size);
 
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
+    if (extend_heap(chunk_size / w_size) == NULL)
         return -1;
 
     heapcheck(__LINE__);
@@ -106,10 +99,10 @@ void *mm_malloc(size_t size) {
         return NULL;
     }
 
-    if (size <= DSIZE) {
-        adj_size = 2 * DSIZE;
+    if (size <= d_size) {
+        adj_size = 2 * d_size;
     } else {
-        adj_size = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+        adj_size = d_size * ((size + (d_size) + (d_size - 1)) / d_size);
     }
 
     if ((bp = find_fit(adj_size)) != NULL) {
@@ -117,7 +110,7 @@ void *mm_malloc(size_t size) {
         return bp;
     }
 
-    ext_size = max(adj_size, CHUNKSIZE);
+    ext_size = max(adj_size, chunk_size);
     if ((bp = extend_heap(ext_size)) == NULL) {
         return NULL;
     }
@@ -148,7 +141,7 @@ void *mm_realloc(void *bp, size_t size) {
     newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    copy_size = get_size(header(oldptr)) - DSIZE;
+    copy_size = get_size(header(oldptr)) - d_size;
     if (size < copy_size)
         copy_size = size;
     memcpy(newptr, oldptr, copy_size);
@@ -160,7 +153,7 @@ static void *extend_heap(size_t words) {
     char *bp;
     size_t size;
 
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+    size = (words % 2) ? (words + 1) * w_size : words * w_size;
 
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
@@ -215,7 +208,7 @@ static void *find_fit(size_t size) {
 
 static void place(void *bp, size_t size) {
     size_t csize = get_size(header(bp));
-    if ((csize - size) >= (2 * DSIZE)) {
+    if ((csize - size) >= (2 * d_size)) {
         put(header(bp), pack(size, 1));
         put(footer(bp), pack(size, 1));
         bp = next_block_pointer(bp);
