@@ -29,13 +29,12 @@ team_t team = {
     /* First member's full name */
     "0x1eaf",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
     ""};
 
-/* single word (4) or double word (8) alignment */
 constexpr unsigned int w_size = 4;
 constexpr unsigned int d_size = 8;
 constexpr unsigned int chunk_size = 1 << 12;
@@ -135,13 +134,11 @@ void mm_free(void *bp) {
  */
 void *mm_realloc(void *bp, size_t size) {
     void *oldptr = bp;
-    void *newptr;
-    size_t copy_size;
 
-    newptr = mm_malloc(size);
+    void *newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    copy_size = get_size(header(oldptr)) - d_size;
+    size_t copy_size = get_size(header(oldptr)) - d_size;
     if (size < copy_size)
         copy_size = size;
     memcpy(newptr, oldptr, copy_size);
@@ -150,11 +147,9 @@ void *mm_realloc(void *bp, size_t size) {
 }
 
 static void *extend_heap(size_t words) {
+    size_t size = (words % 2) ? (words + 1) * w_size : words * w_size;
+
     char *bp;
-    size_t size;
-
-    size = (words % 2) ? (words + 1) * w_size : words * w_size;
-
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
@@ -194,8 +189,7 @@ static void *coalesce(char *bp) {
 }
 
 static void *find_fit(size_t size) {
-    char *bp;
-    for (bp = heap_listp; get_size(header(bp)) > 0;
+    for (char *bp = heap_listp; get_size(header(bp)) > 0;
          bp = next_block_pointer(bp)) {
         if (!get_alloc(header(bp)) && (size <= get_size(header(bp)))) {
             heapcheck(__LINE__);
