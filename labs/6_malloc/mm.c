@@ -29,7 +29,7 @@ team_t team = {
     /* First member's full name */
     "0x1eaf",
     /* First member's email address */
-    "",
+    "mail@0x1eaf.dev",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
@@ -71,13 +71,14 @@ static char *prev_block_pointer(char *bp) { return bp - get_size(bp - d_size); }
 int mm_init(void) {
     if ((heap_listp = mem_sbrk(4 * w_size)) == (void *)-1)
         return -1;
-    put(heap_listp, 0);
-    put(heap_listp + w_size, pack(d_size, 1));
+    put(heap_listp, 0);                        // padding
+    put(heap_listp + w_size, pack(d_size, 1)); // prologue headers
     put(heap_listp + (2 * w_size), pack(d_size, 1));
-    put(heap_listp + (3 * w_size), pack(0, 1));
-    heap_listp += (2 * w_size);
+    put(heap_listp + (3 * w_size), pack(0, 1)); // epilogue marking the end of
+                                                // the currently available heap
+    heap_listp += (2 * w_size); // position heap base at the prologue
 
-    if (extend_heap(chunk_size / w_size) == NULL)
+    if (extend_heap(chunk_size) == NULL)
         return -1;
 
     heapcheck(__LINE__);
@@ -146,15 +147,16 @@ void *mm_realloc(void *bp, size_t size) {
     return newptr;
 }
 
-static void *extend_heap(size_t words) {
-    size_t size = (words % 2) ? (words + 1) * w_size : words * w_size;
+static void *extend_heap(size_t size) {
 
     char *bp;
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
+    // overwrites the previous epilogue
     put(header(bp), pack(size, 0));
     put(footer(bp), pack(size, 0));
+    // new epilogue
     put(header(next_block_pointer(bp)), pack(0, 1));
     heapcheck(__LINE__);
     return coalesce(bp);
