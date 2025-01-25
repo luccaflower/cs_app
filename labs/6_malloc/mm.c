@@ -59,7 +59,8 @@ typedef struct free_node_t {
 } free_node_t;
 
 static char *heap_listp;
-static free_node_t *free_list;
+static free_node_t *free_head;
+static free_node_t *free_tail;
 
 static void *extend_heap(size_t);
 static void *coalesce(char *);
@@ -83,13 +84,18 @@ static char *next_block_pointer(char *bp) { return bp + get_size(header(bp)); }
 static char *prev_block_pointer(char *bp) { return bp - get_size(bp - d_size); }
 static inline void insert_node(free_node_t *node) {
     assert(node);
-    node->next = free_list;
-    node->prev = NULL;
-    if (free_list) {
-        free_list->prev = node;
+    node->next = NULL;
+    if (!free_head) {
+        node->prev = NULL;
+        free_head = node;
+        free_tail = node;
+    } else {
+        node->prev = free_tail;
+        free_tail->next = node;
+        free_tail = node;
     }
-    free_list = node;
-    assert(free_list);
+    assert(free_head);
+    assert(free_tail);
 }
 
 static inline void remove_node(free_node_t *node) {
@@ -98,12 +104,14 @@ static inline void remove_node(free_node_t *node) {
         printf("removing %p from free list\n", node);
     }
     if (!node->next && !node->prev) { // if there are no next or prev,
-        free_list = NULL;
+        free_head = NULL;
+        free_tail = NULL;
     } else if (node->next && !node->prev) { // start of list
         node->next->prev = NULL;
-        free_list = node->next;
+        free_head = node->next;
     } else if (!node->next && node->prev) { // end of list
         node->prev->next = NULL;
+        free_tail = node->prev;
     } else { // middle of list
         node->next->prev = node->prev;
         node->prev->next = node->next;
@@ -122,7 +130,7 @@ int mm_init(void) {
     put(heap_listp + (3 * w_size), pack(0, 1)); // epilogue marking the end of
                                                 // the currently available heap
     heap_listp += (2 * w_size); // position heap base at the prologue
-    free_list = NULL;
+    free_head = NULL;
 
     if (extend_heap(chunk_size) == NULL)
         return -1;
@@ -270,7 +278,7 @@ static void *coalesce(char *bp) {
 }
 
 static void *find_fit(size_t size) {
-    for (free_node_t *node = free_list; node != NULL; node = node->next) {
+    for (free_node_t *node = free_head; node != NULL; node = node->next) {
         if (size <= get_size(header((char *)node))) {
             return node;
         }
@@ -318,13 +326,13 @@ static void mm_heapcheck(int lineno) {
                 "lineno: %d, hd: %d, ft: %d", lineno, get_alloc(header(bp)),
                 get_alloc(footer(bp)));
         if (get_alloc(header(bp))) {
-            for (free_node_t *node = free_list; node != NULL;
+            for (free_node_t *node = free_head; node != NULL;
                  node = node->next) {
                 assert(!((char *)node == bp));
             }
         }
     }
-    for (free_node_t *node = free_list; node != NULL; node = node->next) {
+    for (free_node_t *node = free_head; node != NULL; node = node->next) {
         if (DEBUG) {
             printf("found in free-list %p \n", node);
             fflush(stdout);
