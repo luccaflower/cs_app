@@ -35,8 +35,8 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-// #define heapcheck(lineno) mm_heapcheck(lineno)
-#define heapcheck(lineno)
+#define heapcheck(lineno) mm_heapcheck(lineno)
+// #define heapcheck(lineno)
 #define log_error(M, ...)                                                      \
     fprintf(stdout, "[ERROR] (%s:%d) " M "\n", __FILE__, __LINE__,             \
             ##__VA_ARGS__)
@@ -50,8 +50,11 @@ team_t team = {
 constexpr unsigned int w_size = 4;
 constexpr unsigned int d_size = 8;
 constexpr unsigned int chunk_size = 1 << 12;
-constexpr unsigned int min_block_size =
-    3 * d_size; // header, footer, two pointers,
+
+constexpr unsigned int small_threshold = (1 << 4);
+constexpr unsigned int medium_threshold = (1 << 5);
+// header, footer, two pointers,
+constexpr unsigned int min_block_size = 3 * d_size;
 
 typedef struct free_node_t {
     struct free_node_t *prev;
@@ -59,7 +62,9 @@ typedef struct free_node_t {
 } free_node_t;
 
 static char *heap_listp;
-static free_node_t *free_list;
+static free_node_t *small_list;
+static free_node_t *medium_list;
+static free_node_t *large_list;
 
 static void *extend_heap(size_t);
 static void *coalesce(char *);
@@ -81,32 +86,57 @@ static inline char *footer(char *bp) {
 }
 static char *next_block_pointer(char *bp) { return bp + get_size(header(bp)); }
 static char *prev_block_pointer(char *bp) { return bp - get_size(bp - d_size); }
+static inline void insert_into(free_node_t *node, free_node_t **restrict list) {
+    node->next = *list;
+    node->prev = NULL;
+    if (*list) {
+        (*list)->prev = node;
+    }
+    *list = node;
+}
 static inline void insert_node(free_node_t *node) {
     assert(node);
-    node->next = free_list;
-    node->prev = NULL;
-    if (free_list) {
-        free_list->prev = node;
+    if (DEBUG) {
+        printf("inserting %p into free-list\n", node);
     }
-    free_list = node;
-    assert(free_list);
+    unsigned int size = get_size(header((char *)node));
+    if (size <= small_threshold) {
+        insert_into(node, &small_list);
+        assert(small_list);
+    } else if (size <= medium_threshold) {
+        insert_into(node, &medium_list);
+        assert(medium_list);
+    } else {
+        insert_into(node, &large_list);
+        assert(large_list);
+    }
 }
 
-static inline void remove_node(free_node_t *node) {
-    assert(node);
-    if (DEBUG) {
-        printf("removing %p from free list\n", node);
-    }
+static inline void remove_node_from(free_node_t *node, free_node_t **list) {
     if (!node->next && !node->prev) { // if there are no next or prev,
-        free_list = NULL;
+        *list = NULL;
     } else if (node->next && !node->prev) { // start of list
         node->next->prev = NULL;
-        free_list = node->next;
+        *list = node->next;
     } else if (!node->next && node->prev) { // end of list
         node->prev->next = NULL;
     } else { // middle of list
         node->next->prev = node->prev;
         node->prev->next = node->next;
+    }
+}
+static inline void remove_node(free_node_t *node) {
+    assert(node);
+    if (DEBUG) {
+        printf("removing %p from free list\n", node);
+    }
+    unsigned int size = get_size(header((char *)node));
+    if (size <= small_threshold) {
+        remove_node_from(node, &small_list);
+    } else if (size <= medium_threshold) {
+        remove_node_from(node, &medium_list);
+    } else {
+        remove_node_from(node, &large_list);
     }
 }
 
@@ -122,7 +152,10 @@ int mm_init(void) {
     put(heap_listp + (3 * w_size), pack(0, 1)); // epilogue marking the end of
                                                 // the currently available heap
     heap_listp += (2 * w_size); // position heap base at the prologue
-    free_list = NULL;
+
+    small_list = NULL;
+    medium_list = NULL;
+    large_list = NULL;
 
     if (extend_heap(chunk_size) == NULL)
         return -1;
@@ -237,31 +270,37 @@ static void *coalesce(char *bp) {
     else if (prev_alloc && !next_alloc) {
         char *next_bp = next_block_pointer(bp);
         size += get_size(header(next_bp));
+        free_node_t *current_node = (free_node_t *)bp;
+        remove_node(current_node); // refresh size class
         put(header(bp), pack(size, 0));
         put(footer(bp), pack(size, 0));
         free_node_t *neighbour_node = (free_node_t *)next_bp;
-        assert(neighbour_node->next || neighbour_node->prev);
         remove_node(neighbour_node);
+        insert_node(current_node);
     } else if (!prev_alloc && next_alloc) {
-        size += get_size(footer(prev_block_pointer(bp)));
+        char *prev_bp = prev_block_pointer(bp);
+        size += get_size(footer(prev_bp));
+        free_node_t *prev_node = (free_node_t *)prev_bp;
+        remove_node(prev_node);
         put(footer(bp), pack(size, 0));
         put(header(prev_block_pointer(bp)), pack(size, 0));
         free_node_t *current_node = (free_node_t *)bp;
-        assert(current_node->next || current_node->prev);
         remove_node(current_node);
+        insert_node(prev_node);
         bp = prev_block_pointer(bp);
     } else {
         char *next_bp = next_block_pointer(bp);
-        size += get_size(footer(prev_block_pointer(bp))) +
-                get_size(header(next_bp));
+        char *prev_bp = prev_block_pointer(bp);
+        size += get_size(footer(prev_bp)) + get_size(header(next_bp));
+        free_node_t *prev_node = (free_node_t *)prev_bp;
+        remove_node(prev_node);
         put(header(prev_block_pointer(bp)), pack(size, 0));
         put(footer(next_block_pointer(bp)), pack(size, 0));
         free_node_t *current_node = (free_node_t *)bp;
         free_node_t *next_node = (free_node_t *)next_bp;
-        assert(current_node->next || current_node->prev);
         remove_node(current_node);
-        assert(next_node->next || next_node->prev);
         remove_node(next_node);
+        insert_node(prev_node);
         bp = prev_block_pointer(bp);
     }
 
@@ -270,7 +309,22 @@ static void *coalesce(char *bp) {
 }
 
 static void *find_fit(size_t size) {
-    for (free_node_t *node = free_list; node != NULL; node = node->next) {
+    if (size <= small_threshold) {
+        for (free_node_t *node = small_list; node != NULL; node = node->next) {
+            if (size <= get_size(header((char *)node))) {
+                return node;
+            }
+        }
+    }
+    if (size <= medium_threshold) {
+        for (free_node_t *node = medium_list; node != NULL; node = node->next) {
+            if (size <= get_size(header((char *)node))) {
+                return node;
+            }
+        }
+    }
+
+    for (free_node_t *node = large_list; node != NULL; node = node->next) {
         if (size <= get_size(header((char *)node))) {
             return node;
         }
@@ -285,10 +339,10 @@ static void place(void *bp, size_t size) {
     heapcheck(__LINE__);
     size_t csize = get_size(header(bp));
     if ((csize - size) >= (min_block_size)) {
-        put(header(bp), pack(size, 1));
-        put(footer(bp), pack(size, 1));
         free_node_t *node = (free_node_t *)bp;
         remove_node(node);
+        put(header(bp), pack(size, 1));
+        put(footer(bp), pack(size, 1));
         bp = next_block_pointer(bp);
         put(header(bp), pack(csize - size, 0));
         put(footer(bp), pack(csize - size, 0));
@@ -296,11 +350,27 @@ static void place(void *bp, size_t size) {
         insert_node(new_node);
         heapcheck(__LINE__);
     } else {
-        put(header(bp), pack(csize, 1));
-        put(footer(bp), pack(csize, 1));
         free_node_t *node = (free_node_t *)bp;
         remove_node(node);
+        put(header(bp), pack(csize, 1));
+        put(footer(bp), pack(csize, 1));
         heapcheck(__LINE__);
+    }
+}
+
+static void assert_none_allocated_in(free_node_t *free_list, int lineno) {
+    for (free_node_t *node = free_list; node != NULL; node = node->next) {
+        if (DEBUG) {
+            printf("found in large-list %p \n", node);
+            fflush(stdout);
+        }
+        assertf(!get_alloc(header((char *)node)), "lineno: %d", lineno);
+    }
+}
+
+static void assert_not_found_in(free_node_t *free_list, char *bp) {
+    for (free_node_t *node = free_list; node != NULL; node = node->next) {
+        assert(!((char *)node == bp));
     }
 }
 
@@ -318,17 +388,12 @@ static void mm_heapcheck(int lineno) {
                 "lineno: %d, hd: %d, ft: %d", lineno, get_alloc(header(bp)),
                 get_alloc(footer(bp)));
         if (get_alloc(header(bp))) {
-            for (free_node_t *node = free_list; node != NULL;
-                 node = node->next) {
-                assert(!((char *)node == bp));
-            }
+            assert_not_found_in(large_list, bp);
+            assert_not_found_in(medium_list, bp);
+            assert_not_found_in(small_list, bp);
         }
     }
-    for (free_node_t *node = free_list; node != NULL; node = node->next) {
-        if (DEBUG) {
-            printf("found in free-list %p \n", node);
-            fflush(stdout);
-        }
-        assertf(!get_alloc(header((char *)node)), "lineno: %d", lineno);
-    }
+    assert_none_allocated_in(small_list, lineno);
+    assert_none_allocated_in(medium_list, lineno);
+    assert_none_allocated_in(large_list, lineno);
 }
