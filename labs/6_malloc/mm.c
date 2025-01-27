@@ -35,8 +35,8 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-// #define heapcheck(lineno) mm_heapcheck(lineno)
-#define heapcheck(lineno)
+#define heapcheck(lineno) mm_heapcheck(lineno)
+// #define heapcheck(lineno)
 #define log_error(M, ...)                                                      \
     fprintf(stdout, "[ERROR] (%s:%d) " M "\n", __FILE__, __LINE__,             \
             ##__VA_ARGS__)
@@ -46,7 +46,7 @@ team_t team = {
         log_error(M, ##__VA_ARGS__);                                           \
         assert(A);                                                             \
     }
-#define DEBUG false
+#define DEBUG true
 constexpr size_t w_size = sizeof(size_t);
 constexpr size_t chunk_size = 1 << 12;
 
@@ -193,7 +193,7 @@ void *mm_malloc(size_t size) {
         assert(!(adj_size % 0x8) && "is aligned");
         assert(adj_size >= min_block_size && "is at least minimum block size");
         if (DEBUG) {
-            printf("adjusted size: %zu", adj_size);
+            printf("adjusted size: %zu\n", adj_size);
         }
     }
 
@@ -353,6 +353,7 @@ static void place(void *bp, size_t size) {
         free_node_t *node = (free_node_t *)bp;
         remove_node(node);
         put(header(bp), pack(size, 1));
+        assert(get_alloc(header(bp)));
         bp = next_block_pointer(bp);
         put(header(bp), pack(csize - size, 0));
         set_prev_alloc(header(bp), 1);
@@ -393,7 +394,7 @@ static void mm_heapcheck(int lineno) {
     }
     for (char *bp = heap_listp; get_size(header(bp)) > 0;
          bp = next_block_pointer(bp)) {
-        if (!get_alloc(bp)) {
+        if (!get_alloc(header(bp))) {
             assertf(get_size(header(bp)) == get_size(footer(bp)),
                     "lineno: %d, hd: %zu, ft: %zu, addr: %p", lineno,
                     get_size(header(bp)), get_size(footer(bp)), bp);
