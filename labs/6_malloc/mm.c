@@ -145,21 +145,33 @@ static inline void remove_node(free_node_t *node) {
     }
 }
 
+static inline void split(void *bp, size_t size, size_t csize) {
+    if ((csize - size) >= min_block_size) {
+        put(header(bp), pack(size, 1));
+        bp = next_block_pointer(bp);
+        put(header(bp), pack(csize - size, 0));
+        put(footer(bp), pack(csize - size, 0));
+        set_prev_alloc(header(next_block_pointer(bp)), 0);
+        free_node_t *new_node = (free_node_t *)bp;
+        insert_node(new_node);
+    } else {
+        put(header(bp), pack(csize, 1));
+    }
+}
 /*
  * mm_init - initialize the malloc package.
  */
 int mm_init(void) {
-    if ((heap_listp = mem_sbrk(4 * w_size)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(3 * w_size)) == (void *)-1)
         return -1;
-    put(heap_listp, 0);                            // padding
-    put(heap_listp + w_size, pack(2 * w_size, 1)); // prologue headers
+    put(heap_listp, pack(2 * w_size, 1)); // prologue headers
+    set_prev_alloc(heap_listp, 1);
+    put(heap_listp + w_size, pack(2 * w_size, 1));
     set_prev_alloc(heap_listp + w_size, 1);
-    put(heap_listp + (2 * w_size), pack(2 * w_size, 1));
-    set_prev_alloc(heap_listp + 2 * w_size, 1);
-    put(heap_listp + (3 * w_size), pack(0, 1)); // epilogue marking the end of
+    put(heap_listp + (2 * w_size), pack(0, 1)); // epilogue marking the end of
                                                 // the currently available heap
-    set_prev_alloc(heap_listp + 3 * w_size, 1);
-    heap_listp += (2 * w_size); // position heap base at the prologue
+    set_prev_alloc(heap_listp + 2 * w_size, 1);
+    heap_listp += w_size; // position heap base at the prologue
 
     small_list = NULL;
     medium_list = NULL;
@@ -233,17 +245,34 @@ void mm_free(void *bp) {
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
 void *mm_realloc(void *bp, size_t size) {
+    if (DEBUG) {
+        printf("reallocating %p\n", bp);
+    }
     heapcheck(__LINE__);
     void *oldptr = bp;
 
+    size_t copy_size = get_size(header(oldptr));
+    if (size + w_size < copy_size) {
+        if (DEBUG) {
+            printf("size: %zu, copy_size: %zu, addr: %p\n", size, copy_size,
+                   oldptr);
+            printf("size < copy_size, returning old pointer\n");
+        }
+
+        split(oldptr, size, copy_size);
+        set_prev_alloc(header(next_block_pointer(oldptr)), 1);
+        return oldptr;
+    } else if (size < copy_size) {
+        size = copy_size;
+    }
     void *newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    size_t copy_size = get_size(header(oldptr)) - w_size;
-    if (size < copy_size)
-        copy_size = size;
     memcpy(newptr, oldptr, copy_size);
     mm_free(oldptr);
+    if (DEBUG) {
+        printf("reallocated %p to %p", oldptr, newptr);
+    }
     heapcheck(__LINE__);
     return newptr;
 }
@@ -339,26 +368,13 @@ static void place(void *bp, size_t size) {
     if (DEBUG)
         printf("allocating %p with size %zu \n", bp, size);
     heapcheck(__LINE__);
-    size_t csize = get_size(header(bp));
-    if ((csize - size) >= (min_block_size)) {
-        free_node_t *node = (free_node_t *)bp;
-        remove_node(node);
-        put(header(bp), pack(size, 1));
-        assert(get_alloc(header(bp)));
-        bp = next_block_pointer(bp);
-        put(header(bp), pack(csize - size, 0));
-        set_prev_alloc(header(bp), 1);
-        put(footer(bp), pack(csize - size, 0));
-        free_node_t *new_node = (free_node_t *)bp;
-        insert_node(new_node);
-        heapcheck(__LINE__);
-    } else {
-        free_node_t *node = (free_node_t *)bp;
-        remove_node(node);
-        put(header(bp), pack(csize, 1));
-        set_prev_alloc(header(next_block_pointer(bp)), 1);
-        heapcheck(__LINE__);
-    }
+    heapcheck(__LINE__);
+    size_t block_size = get_size(header(bp));
+
+    free_node_t *node = (free_node_t *)bp;
+    remove_node(node);
+    split(bp, size, block_size);
+    set_prev_alloc(header(next_block_pointer(bp)), 1);
 }
 
 static void assert_none_allocated_in(free_node_t *free_list, int lineno) {
