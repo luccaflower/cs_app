@@ -167,7 +167,6 @@ int mm_init(void) {
     put(heap_listp, pack(2 * w_size, 1)); // prologue headers
     set_prev_alloc(heap_listp, 1);
     put(heap_listp + w_size, pack(2 * w_size, 1));
-    set_prev_alloc(heap_listp + w_size, 1);
     put(heap_listp + (2 * w_size), pack(0, 1)); // epilogue marking the end of
                                                 // the currently available heap
     set_prev_alloc(heap_listp + 2 * w_size, 1);
@@ -292,7 +291,7 @@ static void *extend_heap(size_t size) {
     heapcheck(__LINE__);
     bp = coalesce(bp);
     insert_node((free_node_t *)bp);
-    return coalesce(bp);
+    return bp;
 }
 
 static void *coalesce(char *bp) {
