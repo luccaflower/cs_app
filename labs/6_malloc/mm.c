@@ -35,8 +35,9 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-#define heapcheck(lineno) mm_heapcheck(lineno)
-// #define heapcheck(lineno)
+#define DEBUG false
+// #define heapcheck(lineno) mm_heapcheck(lineno)
+#define heapcheck(lineno)
 #define log_error(M, ...)                                                      \
     fprintf(stdout, "[ERROR] (%s:%d) " M "\n", __FILE__, __LINE__,             \
             ##__VA_ARGS__)
@@ -46,7 +47,6 @@ team_t team = {
         log_error(M, ##__VA_ARGS__);                                           \
         assert(A);                                                             \
     }
-#define DEBUG true
 constexpr size_t w_size = sizeof(size_t);
 constexpr size_t chunk_size = 1 << 12;
 
@@ -75,7 +75,7 @@ static inline size_t max(size_t x, size_t y) { return x > y ? x : y; }
 static inline size_t get(void *p) { return *(size_t *)p; }
 static inline size_t get_size(char *p) { return get(p) & ~0x7; }
 static inline void set_prev_alloc(char *p, size_t alloc) {
-    *(size_t *)p = (alloc << 1) | (*(size_t *)p & ~0x2);
+    *(size_t *)p = (alloc << 1) | (*(size_t *)p & ~(0x2 | 0x4));
 }
 static inline size_t get_prev_alloc(char *p) { return get(p) & 0x2; }
 static inline size_t get_alloc(char *p) { return get(p) & 0x1; }
@@ -224,9 +224,8 @@ void mm_free(void *bp) {
 
     put(header(bp), pack(size, 0));
     put(footer(bp), pack(size, 0));
-    free_node_t *node = (free_node_t *)bp;
-    insert_node(node);
-    coalesce(bp);
+    bp = coalesce(bp);
+    insert_node(bp);
     heapcheck(__LINE__);
 }
 
@@ -258,12 +257,12 @@ static void *extend_heap(size_t size) {
     // overwrites the previous epilogue
     put(header(bp), pack(size, 0));
     put(footer(bp), pack(size, 0));
-    free_node_t *node = (free_node_t *)bp;
-    insert_node(node);
     // new epilogue
     put(header(next_block_pointer(bp)), pack(0, 1));
     set_prev_alloc(next_block_pointer(bp), 0);
     heapcheck(__LINE__);
+    bp = coalesce(bp);
+    insert_node((free_node_t *)bp);
     return coalesce(bp);
 }
 
@@ -271,6 +270,7 @@ static void *coalesce(char *bp) {
     if (DEBUG) {
         printf("coalescing %p\n", bp);
     }
+
     size_t prev_alloc = get_prev_alloc(header(bp));
     size_t next_alloc = get_alloc(header(next_block_pointer(bp)));
     size_t size = get_size(header(bp));
@@ -281,13 +281,10 @@ static void *coalesce(char *bp) {
     else if (prev_alloc && !next_alloc) {
         char *next_bp = next_block_pointer(bp);
         size += get_size(header(next_bp));
-        free_node_t *current_node = (free_node_t *)bp;
-        remove_node(current_node); // refresh size class
         put(header(bp), pack(size, 0));
         put(footer(bp), pack(size, 0));
         free_node_t *neighbour_node = (free_node_t *)next_bp;
         remove_node(neighbour_node);
-        insert_node(current_node);
     } else if (!prev_alloc && next_alloc) {
         char *prev_bp = prev_block_pointer(bp);
         size += get_size(footer(prev_bp));
@@ -295,9 +292,6 @@ static void *coalesce(char *bp) {
         remove_node(prev_node);
         put(footer(bp), pack(size, 0));
         put(header(prev_block_pointer(bp)), pack(size, 0));
-        free_node_t *current_node = (free_node_t *)bp;
-        remove_node(current_node);
-        insert_node(prev_node);
         bp = prev_block_pointer(bp);
     } else {
         char *next_bp = next_block_pointer(bp);
@@ -307,11 +301,8 @@ static void *coalesce(char *bp) {
         remove_node(prev_node);
         put(header(prev_block_pointer(bp)), pack(size, 0));
         put(footer(next_block_pointer(bp)), pack(size, 0));
-        free_node_t *current_node = (free_node_t *)bp;
         free_node_t *next_node = (free_node_t *)next_bp;
-        remove_node(current_node);
         remove_node(next_node);
-        insert_node(prev_node);
         bp = prev_block_pointer(bp);
     }
 
