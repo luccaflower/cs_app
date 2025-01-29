@@ -1,13 +1,7 @@
 /*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
- *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * My implementation of Malloc
+ * Segregated free-list implementation with free-lists divided
+ * by size-classes of powers of two
  */
 #include <assert.h>
 #include <stddef.h>
@@ -48,7 +42,7 @@ team_t team = {
         assert(A);                                                             \
     }
 constexpr size_t w_size = sizeof(size_t);
-constexpr size_t w_bits = w_size * 4;
+constexpr size_t w_bits = w_size * w_size;
 constexpr size_t chunk_size = 1 << 12;
 
 // header, footer, two pointers,
@@ -89,16 +83,13 @@ static char *prev_block_pointer(char *bp) {
     return bp - get_size(bp - (2 * w_size));
 }
 
+// we use log base2 to index into the array of free-lists
 static inline size_t log2_of(size_t n) {
     size_t shift = w_bits >> 1;
     size_t step = w_bits >> 2;
     size_t shifted_n;
     while ((shifted_n = (n >> shift)) != 1) {
-        if (!shifted_n) {
-            shift -= step;
-        } else {
-            shift += step;
-        }
+        shift = shifted_n ? shift + step : shift - step;
         step = max(step >> 1, 1);
     }
 
@@ -191,8 +182,8 @@ int mm_init(void) {
 }
 
 /*
- * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
+ * mm_malloc - allocate a memory block using a first-fit policy.
+ * Extend the heap as needed.
  */
 void *mm_malloc(size_t size) {
     heapcheck(__LINE__);
@@ -231,7 +222,8 @@ void *mm_malloc(size_t size) {
 }
 
 /*
- * mm_free - Freeing a block does nothing.
+ * mm_free - Freeing a block of memory coalesces it with neighbouring free
+ * block and inserts it into its appropriate free-list.
  */
 void mm_free(void *bp) {
     if (DEBUG)
@@ -248,7 +240,12 @@ void mm_free(void *bp) {
 }
 
 /*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ * mm_realloc - memcpy is expensive so we want to avoid that. If we realloc for
+ * a smaller size, we can simply return the same pointer. If we can coalesce
+ * with the next block to fit the requested size, then that too will avoid the
+ * memcpy. Finally as a last resort, we malloc a new block to fit the requested
+ * size, memcpy from the old pointer, and free it. We could improve the
+ * utilization of memory here by doing some splitting.
  */
 void *mm_realloc(void *bp, size_t size) {
     if (DEBUG) {
@@ -257,14 +254,29 @@ void *mm_realloc(void *bp, size_t size) {
     heapcheck(__LINE__);
     void *oldptr = bp;
 
-    size_t copy_size = get_size(header(oldptr));
-    if (size < copy_size) {
-        size = copy_size;
+    size_t block_size = get_size(header(oldptr));
+    if (size + w_size < block_size) {
+        return oldptr;
+    } else if (size < block_size) {
+        size = block_size;
     }
+
+    char *next_bp = next_block_pointer(bp);
+    size_t next_alloc = get_alloc(header(next_bp));
+    size_t next_size = get_size(header(next_bp));
+    if (!next_alloc && size + w_size <= block_size + next_size) {
+        block_size += next_size;
+        put(header(bp), pack(block_size, 1));
+        remove_node((free_node_t *)next_bp);
+        set_prev_alloc(header(next_block_pointer(bp)), 1);
+        heapcheck(__LINE__);
+        return bp;
+    }
+
     void *newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    memcpy(newptr, oldptr, copy_size);
+    memcpy(newptr, oldptr, block_size);
     mm_free(oldptr);
     if (DEBUG) {
         printf("reallocated %p to %p", oldptr, newptr);
