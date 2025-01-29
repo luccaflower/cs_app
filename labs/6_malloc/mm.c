@@ -42,7 +42,7 @@ team_t team = {
         assert(A);                                                             \
     }
 constexpr size_t w_size = sizeof(size_t);
-constexpr size_t w_bits = w_size * w_size;
+constexpr size_t w_bits = 8 * w_size;
 constexpr size_t chunk_size = 1 << 12;
 
 // header, footer, two pointers,
