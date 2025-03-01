@@ -129,8 +129,9 @@ void forward(int clientfd) {
     Rio_readinitb(&server_rio, serverfd);
     puts("FROM SERVER TO CLIENT");
     printf("%s", from_server_buf);
-    while (Rio_readlineb(&server_rio, from_server_buf, MAXLINE) != 0) {
-        Rio_writen(clientfd, from_server_buf, strlen(from_server_buf));
+    int read;
+    while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
+        Rio_writen(clientfd, from_server_buf, read);
         printf("%s", from_server_buf);
     }
 
