@@ -3,8 +3,10 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Recommended max cache and object sizes */
@@ -159,6 +161,13 @@ void forward(int clientfd) {
     close(serverfd);
     close(clientfd);
 }
+
+void sigchld_handler(int sig) {
+    while (waitpid(-1, 0, WNOHANG) > 0) {
+    }
+    return;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage; %s <port>\n", argv[0]);
@@ -168,14 +177,17 @@ int main(int argc, char **argv) {
     Sigemptyset(&mask);
     Sigaddset(&mask, SIGPIPE);
     Sigprocmask(SIG_BLOCK, &mask, NULL);
+    Signal(SIGCHLD, sigchld_handler);
+
     while (1) {
         struct sockaddr_storage clientaddr;
         unsigned clientlen = sizeof(clientaddr);
         int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        char client_hostname[MAXLINE], client_port[MAXLINE];
-        Getnameinfo((SA *)&clientaddr, clientlen, client_hostname, MAXLINE,
-                    client_port, MAXLINE, 0);
-        printf("connected to %s:%s\n", client_hostname, client_port);
-        forward(connfd);
+        if (Fork() == 0) {
+            Close(listenfd);
+            forward(connfd);
+            exit(0);
+        }
+        Close(connfd);
     }
 }
