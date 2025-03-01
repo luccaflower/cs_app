@@ -1,5 +1,7 @@
 #include "csapp.h"
+#include <bits/pthreadtypes.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -168,6 +170,14 @@ void sigchld_handler(int sig) {
     return;
 }
 
+void *forward_thread(void *vargp) {
+    int clientfd = *(int *)vargp;
+    Free(vargp);
+    Pthread_detach(pthread_self());
+    forward(clientfd);
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage; %s <port>\n", argv[0]);
@@ -179,15 +189,12 @@ int main(int argc, char **argv) {
     Sigprocmask(SIG_BLOCK, &mask, NULL);
     Signal(SIGCHLD, sigchld_handler);
 
+    pthread_t tid;
     while (1) {
         struct sockaddr_storage clientaddr;
         unsigned clientlen = sizeof(clientaddr);
-        int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        if (Fork() == 0) {
-            Close(listenfd);
-            forward(connfd);
-            exit(0);
-        }
-        Close(connfd);
+        int *connfdp = Malloc(sizeof(*connfdp));
+        *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        Pthread_create(&tid, NULL, forward_thread, (void *)connfdp);
     }
 }
