@@ -1,5 +1,6 @@
 #include "csapp.h"
 #include <netdb.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -163,6 +164,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage; %s <port>\n", argv[0]);
     }
     int listenfd = Open_listenfd(argv[1]);
+    sigset_t mask;
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGPIPE);
+    Sigprocmask(SIG_BLOCK, &mask, NULL);
     while (1) {
         struct sockaddr_storage clientaddr;
         unsigned clientlen = sizeof(clientaddr);
