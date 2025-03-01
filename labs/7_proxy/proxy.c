@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
@@ -74,7 +75,6 @@ void read_requesthdr(rio_t *rio, struct headers *hdr) {
     char buf[MAXLINE];
     Rio_readlineb(rio, buf, MAXLINE);
 
-    puts("Request headers:");
     while (strcmp(buf, "\r\n")) {
         sscanf(buf, "Host: %s", hdr->host);
         Rio_readlineb(rio, buf, MAXLINE);
@@ -94,9 +94,13 @@ void forward(int clientfd) {
     // forward server response to client
     char client_buf[MAXLINE], from_server_buf[MAXLINE], to_server_buf[MAXLINE];
     rio_t client_rio, server_rio;
-    Rio_readinitb(&client_rio, clientfd);
-    Rio_readlineb(&client_rio, client_buf, MAXLINE);
-    puts(client_buf);
+    rio_readinitb(&client_rio, clientfd);
+    if (rio_readlineb(&client_rio, client_buf, MAXLINE) < 0) {
+        printf("Error while reading request from client: %s\n",
+               strerror(errno));
+        close(clientfd);
+        return;
+    }
     struct request request;
     if (parse_request(client_buf, &request) != 3) {
         printf("invalid format: %s", client_buf);
@@ -113,7 +117,13 @@ void forward(int clientfd) {
 
     struct destination dest;
     parse_host(hdr.host, &dest);
-    int serverfd = Open_clientfd(dest.host, dest.port);
+    int serverfd = open_clientfd(dest.host, dest.port);
+    if (serverfd < 0) {
+        printf("Error connecting to %s on port %s: %s\n", dest.host, dest.port,
+               strerror(errno));
+        close(clientfd);
+        return;
+    }
     puts("FROM CLIENT TO SERVER");
     sprintf(to_server_buf,
             "GET %s HTTP/1.0\r\n"
@@ -124,19 +134,29 @@ void forward(int clientfd) {
             "\r\n",
             request.uri, hdr.host, user_agent_hdr);
     printf("%s", to_server_buf);
-    Rio_writen(serverfd, to_server_buf, strlen(to_server_buf));
-
-    Rio_readinitb(&server_rio, serverfd);
-    puts("FROM SERVER TO CLIENT");
-    printf("%s", from_server_buf);
-    int read;
-    while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
-        Rio_writen(clientfd, from_server_buf, read);
-        printf("%s", from_server_buf);
+    if (rio_writen(serverfd, to_server_buf, strlen(to_server_buf)) < 0) {
+        printf("Failed to write complete request to server: %s\n",
+               strerror(errno));
+        close(serverfd);
+        close(clientfd);
     }
 
-    Close(serverfd);
-    Close(clientfd);
+    rio_readinitb(&server_rio, serverfd);
+    int read;
+    while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
+        if (rio_writen(clientfd, from_server_buf, read) < 0) {
+            printf("Failed to write complete server response to client: %s\n",
+                   strerror(errno));
+            close(serverfd);
+            close(clientfd);
+            return;
+        }
+    }
+
+    puts("Request complete");
+
+    close(serverfd);
+    close(clientfd);
 }
 int main(int argc, char **argv) {
     if (argc != 2) {
