@@ -3,6 +3,7 @@
 #include <bits/pthreadtypes.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -75,6 +76,7 @@ struct cache {
 };
 
 static struct cache cache;
+static sem_t cache_mutex;
 
 void init_cache(struct cache *cache, unsigned int capacity,
                 unsigned int max_object_size) {
@@ -86,8 +88,6 @@ void init_cache(struct cache *cache, unsigned int capacity,
 }
 
 void move_up(struct cache_entry *entry, struct cache *cache) {
-    puts("Move up");
-    puts(entry->url);
     if (!entry->next && !entry->prev) {
         // only entry in list, nothing to do
         return;
@@ -121,8 +121,6 @@ struct cache_entry *new_entry(char *url, void *content, size_t content_len) {
 }
 void insert(struct cache_entry *entry, struct cache *cache) {
     assert(entry);
-    puts("Inserting new entry for URL");
-    puts(entry->url);
     if (!cache->head) {
         puts("Empty cache, inserting first object");
         // no head means empty.
@@ -142,7 +140,6 @@ void insert(struct cache_entry *entry, struct cache *cache) {
         cache->tail->next = NULL;
         free_entry(old_tail);
     }
-    puts("Inserting new");
     cache->head->prev = entry;
     entry->next = cache->head;
     cache->head = entry;
@@ -151,16 +148,13 @@ void insert(struct cache_entry *entry, struct cache *cache) {
 }
 
 struct cache_entry *get(char *url, struct cache *cache) {
-    puts("Trying to find URL");
-    puts(url);
     for (struct cache_entry *entry = cache->head; entry; entry = entry->next) {
-        puts(entry->url);
         if (!strcmp(entry->url, url)) {
             move_up(entry, cache);
+            V(&cache_mutex);
             return entry;
         }
     }
-    puts("No entries found");
     return NULL;
 }
 
@@ -215,7 +209,9 @@ void forward(int clientfd) {
         Close(clientfd);
         return;
     }
+    P(&cache_mutex);
     struct cache_entry *entry = get(request.uri, &cache);
+    V(&cache_mutex);
     if (entry) {
         puts("Cached entry found!");
         rio_writen(clientfd, entry->content, entry->content_len);
@@ -262,9 +258,11 @@ void forward(int clientfd) {
     int read;
     while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
         if (read <= cache.capacity_bytes) {
+            P(&cache_mutex);
             struct cache_entry *entry =
                 new_entry(request.uri, from_server_buf, read);
             insert(entry, &cache);
+            V(&cache_mutex);
         }
         if (rio_writen(clientfd, from_server_buf, read) < 0) {
             printf("Failed to write complete server response to client: %s\n",
@@ -308,12 +306,12 @@ int main(int argc, char **argv) {
     init_cache(&cache, 1 << 20, 100 * (1 << 10));
 
     pthread_t tid;
+    sem_init(&cache_mutex, 0, 1);
     while (1) {
         struct sockaddr_storage clientaddr;
         unsigned clientlen = sizeof(clientaddr);
         int *connfdp = Malloc(sizeof(*connfdp));
         *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        forward(*connfdp);
-        free(connfdp);
+        Pthread_create(&tid, NULL, forward_thread, connfdp);
     }
 }
