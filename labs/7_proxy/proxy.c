@@ -1,4 +1,5 @@
 #include "csapp.h"
+#include <assert.h>
 #include <bits/pthreadtypes.h>
 #include <netdb.h>
 #include <pthread.h>
@@ -58,15 +59,114 @@ void echo(int connfd) {
     }
 }
 
+struct cache_entry {
+    char *url;
+    void *content;
+    unsigned int content_len;
+    struct cache_entry *next;
+    struct cache_entry *prev;
+};
+struct cache {
+    unsigned int capacity_bytes;
+    unsigned int used_bytes;
+    unsigned int max_object_size;
+    struct cache_entry *head;
+    struct cache_entry *tail;
+};
+
+static struct cache cache;
+
+void init_cache(struct cache *cache, unsigned int capacity,
+                unsigned int max_object_size) {
+    cache->capacity_bytes = capacity;
+    cache->used_bytes = 0;
+    cache->max_object_size = max_object_size;
+    cache->head = NULL;
+    cache->tail = NULL;
+}
+
+void move_up(struct cache_entry *entry, struct cache *cache) {
+    puts("Move up");
+    puts(entry->url);
+    if (!entry->next && !entry->prev) {
+        // only entry in list, nothing to do
+        return;
+    } else if (!entry->next) {
+        // tail of the list
+        entry->prev->next = NULL;
+        cache->tail = entry->prev;
+        entry->next = cache->head;
+        cache->head->prev = entry;
+        cache->head = entry;
+    } else if (!entry->prev) {
+        // already at the head of the list, nothing to do
+        return;
+    }
+}
+void free_entry(struct cache_entry *entry) {
+    free(entry->url);
+    free(entry->content);
+    free(entry);
+}
+struct cache_entry *new_entry(char *url, void *content, size_t content_len) {
+    struct cache_entry *entry = Malloc(sizeof(*entry));
+    entry->url = Malloc(strlen(url));
+    strcpy(entry->url, url);
+    entry->content = Malloc(content_len);
+    memcpy(entry->content, content, content_len);
+    entry->content_len = content_len;
+    entry->next = NULL;
+    entry->prev = NULL;
+    return entry;
+}
+void insert(struct cache_entry *entry, struct cache *cache) {
+    assert(entry);
+    puts("Inserting new entry for URL");
+    puts(entry->url);
+    if (!cache->head) {
+        puts("Empty cache, inserting first object");
+        // no head means empty.
+        // this means the entry is the new tail and head
+        cache->head = entry;
+        cache->tail = entry;
+        cache->used_bytes += entry->content_len;
+        assert(cache->head);
+        assert(cache->tail);
+        return;
+    }
+    while (cache->used_bytes + entry->content_len > cache->capacity_bytes) {
+        puts("Reducing cache size");
+        cache->used_bytes -= cache->tail->content_len;
+        struct cache_entry *old_tail = cache->tail;
+        cache->tail = cache->tail->prev;
+        cache->tail->next = NULL;
+        free_entry(old_tail);
+    }
+    puts("Inserting new");
+    cache->head->prev = entry;
+    entry->next = cache->head;
+    cache->head = entry;
+    assert(cache->head);
+    assert(cache->tail);
+}
+
+struct cache_entry *get(char *url, struct cache *cache) {
+    puts("Trying to find URL");
+    puts(url);
+    for (struct cache_entry *entry = cache->head; entry; entry = entry->next) {
+        puts(entry->url);
+        if (!strcmp(entry->url, url)) {
+            move_up(entry, cache);
+            return entry;
+        }
+    }
+    puts("No entries found");
+    return NULL;
+}
+
 int parse_request(char *request_line, struct request *out) {
     char ignored[MAXLINE];
-    char uri[MAXLINE];
-    char *parsed;
-    int num = sscanf(request_line, "%s %s %s", out->method, uri, ignored);
-    parsed = strchr(uri, '/');
-    parsed = strchr(parsed + 1, '/');
-    parsed = strchr(parsed + 1, '/');
-    strcpy(out->uri, parsed);
+    int num = sscanf(request_line, "%s %s %s", out->method, out->uri, ignored);
     return num;
 }
 
@@ -87,6 +187,9 @@ void read_requesthdr(rio_t *rio, struct headers *hdr) {
     if (!*hdr->host) {
         strcpy(hdr->host, "www.cs.cmu.com");
     }
+    hdr->connection = "close";
+    hdr->proxy_connection = "close";
+    hdr->user_agent = user_agent_hdr;
 }
 
 void forward(int clientfd) {
@@ -112,13 +215,21 @@ void forward(int clientfd) {
         Close(clientfd);
         return;
     }
+    struct cache_entry *entry = get(request.uri, &cache);
+    if (entry) {
+        puts("Cached entry found!");
+        rio_writen(clientfd, entry->content, entry->content_len);
+        close(clientfd);
+        return;
+    }
+
+    char *uri_path = strchr(request.uri, '/');
+    uri_path = strchr(uri_path + 1, '/');
+    uri_path = strchr(uri_path + 1, '/');
     request.version = "HTTP/1.0";
     struct headers hdr;
     memset(&hdr, 0, sizeof(hdr));
     read_requesthdr(&client_rio, &hdr);
-    hdr.connection = "close";
-    hdr.proxy_connection = "close";
-    hdr.user_agent = user_agent_hdr;
 
     struct destination dest;
     parse_host(hdr.host, &dest);
@@ -129,6 +240,7 @@ void forward(int clientfd) {
         close(clientfd);
         return;
     }
+
     puts("FROM CLIENT TO SERVER");
     sprintf(to_server_buf,
             "GET %s HTTP/1.0\r\n"
@@ -137,7 +249,7 @@ void forward(int clientfd) {
             "Proxy-Connection: close\r\n"
             "User-Agent: %s\r\n"
             "\r\n",
-            request.uri, hdr.host, user_agent_hdr);
+            uri_path, hdr.host, user_agent_hdr);
     printf("%s", to_server_buf);
     if (rio_writen(serverfd, to_server_buf, strlen(to_server_buf)) < 0) {
         printf("Failed to write complete request to server: %s\n",
@@ -149,6 +261,11 @@ void forward(int clientfd) {
     rio_readinitb(&server_rio, serverfd);
     int read;
     while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
+        if (read <= cache.capacity_bytes) {
+            struct cache_entry *entry =
+                new_entry(request.uri, from_server_buf, read);
+            insert(entry, &cache);
+        }
         if (rio_writen(clientfd, from_server_buf, read) < 0) {
             printf("Failed to write complete server response to client: %s\n",
                    strerror(errno));
@@ -188,6 +305,7 @@ int main(int argc, char **argv) {
     Sigaddset(&mask, SIGPIPE);
     Sigprocmask(SIG_BLOCK, &mask, NULL);
     Signal(SIGCHLD, sigchld_handler);
+    init_cache(&cache, 1 << 20, 100 * (1 << 10));
 
     pthread_t tid;
     while (1) {
@@ -195,6 +313,7 @@ int main(int argc, char **argv) {
         unsigned clientlen = sizeof(clientaddr);
         int *connfdp = Malloc(sizeof(*connfdp));
         *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        Pthread_create(&tid, NULL, forward_thread, (void *)connfdp);
+        forward(*connfdp);
+        free(connfdp);
     }
 }
