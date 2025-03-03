@@ -40,26 +40,6 @@ struct request {
     char *version;
 };
 
-void echo(int connfd) {
-    char buf[MAXLINE];
-    rio_t rio;
-    Rio_readinitb(&rio, connfd);
-    ssize_t n;
-    while ((n = rio_readlineb(&rio, buf, MAXLINE)) != 0) {
-        if (n < 0) {
-            Close(connfd);
-            return;
-        }
-        printf("server received %zu bytes \n", n);
-        int written = rio_writen(connfd, buf, n);
-        if (written < 0) {
-            Close(connfd);
-            return;
-        }
-        puts(buf);
-    }
-}
-
 struct cache_entry {
     char *url;
     void *content;
@@ -88,19 +68,25 @@ void init_cache(struct cache *cache, unsigned int capacity,
 }
 
 void move_up(struct cache_entry *entry, struct cache *cache) {
-    if (!entry->next && !entry->prev) {
-        // only entry in list, nothing to do
+    if (!entry->prev) {
+        // already at the head, nothing to do
         return;
     } else if (!entry->next) {
         // tail of the list
         entry->prev->next = NULL;
         cache->tail = entry->prev;
         entry->next = cache->head;
+        entry->prev = NULL;
         cache->head->prev = entry;
         cache->head = entry;
-    } else if (!entry->prev) {
-        // already at the head of the list, nothing to do
-        return;
+    } else {
+        // middle of list
+        entry->prev->next = entry->next;
+        entry->next->prev = entry->prev;
+        entry->next = cache->head;
+        entry->prev = NULL;
+        cache->head->prev = entry;
+        cache->head = entry;
     }
 }
 void free_entry(struct cache_entry *entry) {
@@ -121,6 +107,8 @@ struct cache_entry *new_entry(char *url, void *content, size_t content_len) {
 }
 void insert(struct cache_entry *entry, struct cache *cache) {
     assert(entry);
+    assert(entry->content_len <= cache->max_object_size);
+    assert(entry->content_len <= cache->capacity_bytes);
     if (!cache->head) {
         puts("Empty cache, inserting first object");
         // no head means empty.
@@ -136,7 +124,7 @@ void insert(struct cache_entry *entry, struct cache *cache) {
         puts("Reducing cache size");
         cache->used_bytes -= cache->tail->content_len;
         struct cache_entry *old_tail = cache->tail;
-        cache->tail = cache->tail->prev;
+        cache->tail = old_tail->prev;
         cache->tail->next = NULL;
         free_entry(old_tail);
     }
@@ -257,7 +245,7 @@ void forward(int clientfd) {
     rio_readinitb(&server_rio, serverfd);
     int read;
     while ((read = rio_readnb(&server_rio, from_server_buf, MAXLINE)) != 0) {
-        if (read <= cache.capacity_bytes) {
+        if (read <= cache.max_object_size) {
             P(&cache_mutex);
             struct cache_entry *entry =
                 new_entry(request.uri, from_server_buf, read);
